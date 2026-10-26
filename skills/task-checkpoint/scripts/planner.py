@@ -143,6 +143,7 @@ def main():
     p.add_argument('--root', type=Path, required=True)
     p.add_argument('command', choices=['status', 'approve', 'boundary'])
     p.add_argument('--scope'); p.add_argument('--source')
+    p.add_argument('--signals', type=Path, help='Telemetry override; otherwise use configured signals_path or project signals.json')
     p.add_argument('--seconds', type=int, default=3600)
     p.add_argument('--execute', action='store_true')
     a = p.parse_args(); root = a.root.resolve(); _, store = cp.config(root)
@@ -150,7 +151,11 @@ def main():
     if a.command == 'approve':
         result = approve(root, source, config_path, a.scope, a.source, a.seconds)
     else:
-        result = boundary(root, source, config_path, cp.read(store/'signals.json'), a.execute)
+        configured = cp.read(config_path).get('signals_path')
+        signal_path = a.signals or (Path(configured).expanduser() if configured else store/'signals.json')
+        if not signal_path.is_absolute():
+            signal_path = root/signal_path
+        result = boundary(root, source, config_path, cp.read(signal_path), a.execute)
     print(json.dumps(result, indent=2))
 
 

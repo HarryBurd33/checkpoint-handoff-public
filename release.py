@@ -40,7 +40,7 @@ def export(root, output, allowlist=None):
     try:
         with zipfile.ZipFile(temporary,'w',compression=zipfile.ZIP_DEFLATED) as z:
             for n,b in sorted(content.items()):
-                info=zipfile.ZipInfo(n,(2020,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.external_attr=0o100644<<16
+                info=zipfile.ZipInfo(n,(2020,1,1,0,0,0));info.compress_type=zipfile.ZIP_DEFLATED;info.create_system=3;info.external_attr=0o100644<<16
                 z.writestr(info,b)
         raw=temporary.read_bytes()
         if output.exists() and output.read_bytes()!=raw:raise ValueError('Export output exists with different content; use a new versioned path')

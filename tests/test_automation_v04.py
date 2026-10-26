@@ -33,6 +33,23 @@ class PlanTests(unittest.TestCase):
                  'checkpoint_boundary':'Exact result acceptance passes','contract':contract}
         self.task['routing']['work_packages']=[package]
         self.prepare()
+    def test_cli_uses_configured_signals_without_project_copy(self):
+        external=Path(self.temp.name)/'account-signals.json'
+        cp.atomic(external,cp.encoded(self.signals))
+        self.config['signals_path']=str(external)
+        cp.atomic(self.config_path,cp.encoded(self.config))
+        argv=['planner.py','--root',str(self.root),'status']
+        with mock.patch.object(sys,'argv',argv),mock.patch.object(planner,'boundary',return_value={'action':'pause'}) as boundary,mock.patch('builtins.print'):
+            planner.main()
+        self.assertEqual(boundary.call_args.args[3],self.signals)
+        override=Path(self.temp.name)/'override.json';cp.atomic(override,cp.encoded({'records':[]}))
+        with mock.patch.object(sys,'argv',argv+['--signals',str(override)]),mock.patch.object(planner,'boundary',return_value={}) as boundary,mock.patch('builtins.print'):
+            planner.main()
+        self.assertEqual(boundary.call_args.args[3],{'records':[]})
+        external.unlink()
+        with mock.patch.object(sys,'argv',argv),self.assertRaises(cp.Fault):
+            planner.main()
+
     def test_automatic_boundary_acceptance_and_dedup(self):
         planner.approve(self.root,self.source,self.config_path,'fixture package','current test')
         result=planner.boundary(self.root,self.source,self.config_path,self.signals,True)
@@ -223,6 +240,45 @@ class BundleTests(unittest.TestCase):
             transfer.gh.return_value=json.dumps(releases).encode()
             with self.assertRaises(cp.Fault):transfer.receive_latest(self.root,'example/fixture')
 
+    def test_transferred_stop_retains_secondary_account_scope(self):
+        import profiles,monitor
+        primary=profiles.fingerprint('synthetic-primary')
+        secondary=profiles.fingerprint('synthetic-secondary')
+        cp.atomic(self.store/'automatic-stop.json',cp.encoded({'low_kinds':['codex_plan'],
+            'resource_accounts':[secondary],'checkpoint_status':'verified','checkpoint_id':self.initial['id']}))
+        meta=self.package();ident=meta['checkpoint_id']
+        self.assertEqual(meta['version'],2)  # Legacy version1 readers reject this envelope.
+        with zipfile.ZipFile(self.archive) as bundle:
+            downgraded={n:bundle.read(n) for n in bundle.namelist()}
+        legacy=json.loads(downgraded['bundle.json']);legacy['version']=1
+        downgraded['bundle.json']=cp.encoded(legacy)
+        invalid=Path(self.tmp.name)/'invalid-version1-scoped.zip';invalid.write_bytes(transfer.zip_bytes(downgraded))
+        with self.assertRaisesRegex(cp.Fault,'bundle version2'):
+            transfer.verify(invalid,self.binding['project_id'],self.binding['task_id'],meta['source_revision'])
+        incoming=self.store/'incoming'/ident
+        transfer.quarantine(self.root,self.archive,meta['archive_sha256'],self.binding['project_id'],
+                            self.binding['task_id'],meta['source_revision'],incoming)
+        # Simulate a different destination store's lack of a prior local stop.
+        (self.store/'automatic-stop.json').unlink()
+        _,report=transfer.inspect_incoming(self.root,ident)
+        review={'checkpoint_id':ident,'current_fingerprint':report['current_fingerprint'],
+            'observed_at':cp.now(),'authorization':{'confirmed':True,'scope':'fixture data adoption','source':'synthetic operator'},
+            'destination_reconciliation':'Unchanged fixture source; source account stop must remain bound'}
+        cp.atomic(self.store/'adopt-review.json',cp.encoded(review));transfer.adopt(self.root,ident,self.store/'adopt-review.json')
+        self.assertEqual(cp.read(self.store/'automatic-stop.json').get('resource_accounts'),[secondary])
+        def signal(ident,remaining):
+            return {'records':[{'kind':'codex_plan','remaining':remaining,'unit':'percent_remaining',
+                'source':'synthetic fixture','observed_at':cp.now(),'guard':20,'account_fingerprint':ident}]}
+        signals=signal(primary,90);signals['accounts']={secondary:signal(secondary,10)}
+        cp.atomic(self.store/'signals.json',cp.encoded(signals))
+        with self.assertRaises(cp.Fault):monitor.validate_resume(self.root,self.store)
+        signals['accounts']={}
+        cp.atomic(self.store/'signals.json',cp.encoded(signals))
+        with self.assertRaises(cp.Fault):monitor.validate_resume(self.root,self.store)
+        signals['accounts'][secondary]=signal(secondary,90)
+        cp.atomic(self.store/'signals.json',cp.encoded(signals));monitor.validate_resume(self.root,self.store)
+        self.assertTrue((self.store/'automatic-stop.json').exists())
+
     def test_adoption_refuses_competing_owner(self):
         meta=self.package();ident=meta['checkpoint_id']
         transfer.quarantine(self.root,self.archive,meta['archive_sha256'],self.binding['project_id'],self.binding['task_id'],meta['source_revision'],self.store/'incoming'/ident)
@@ -274,3 +330,62 @@ class RepairTests(unittest.TestCase):
             (target/'SKILL.md').write_text('customized')
             self.assertEqual(subprocess.run(cmd,capture_output=True).returncode,2)
             self.assertEqual((target/'SKILL.md').read_text(),'customized')
+
+
+class ProjectHookStatusTests(unittest.TestCase):
+    def test_status_requires_project_binding_even_with_account_delivery(self):
+        spec=importlib.util.spec_from_file_location('delivery_setup',ROOT/'setup.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as d:
+            base=Path(d);project=base/'project';store=project/'.checkpoint';store.mkdir(parents=True)
+            state=base/'account';state.mkdir()
+            binding={'schema_version':1,'ownership':'local','project_id':'example/project','task_id':'existing-task','store':None}
+            cp.atomic(store/'config.json',cp.encoded(binding))
+            cp.atomic(state/'config.json',cp.encoded({'codex_home':str(base/'profile')}))
+            event={'root':str(base/'elsewhere'),'task_id':'other','project_id':'other','event':'SessionEnd','observed_at':cp.now()}
+            cp.atomic(state/'hook-delivery.json',cp.encoded(event))
+            def status():
+                with mock.patch.object(module.subprocess,'run',return_value=subprocess.CompletedProcess([],0,stdout='example')):
+                    return module.status(project,base/'skills',state,base/'profile')
+            self.assertEqual(status()['project_hook_delivery_status'],'missing')
+            self.assertNotIn('project_hook_delivery',status())
+            cp.atomic(store/'native-hook-delivery.json',cp.encoded(event))
+            self.assertEqual(status()['project_hook_delivery_status'],'binding-mismatch')
+            event.update(root=str(project),task_id='existing-task',project_id='example/project')
+            cp.atomic(store/'native-hook-delivery.json',cp.encoded(event))
+            self.assertEqual(status()['project_hook_delivery_status'],'observed')
+            self.assertEqual(status()['project_hook_delivery'],event)
+            event['task_id']='other';cp.atomic(store/'native-hook-delivery.json',cp.encoded(event))
+            self.assertEqual(status()['project_hook_delivery_status'],'binding-mismatch')
+            cp.atomic(store/'native-hook-delivery.json',b'broken json')
+            self.assertEqual(status()['project_hook_delivery_status'],'invalid-receipt')
+
+
+class PortableZipMetadataTests(unittest.TestCase):
+    def platform_zero(self):
+        original=zipfile.ZipInfo
+        class PlatformZeroInfo(original):
+            def __init__(self,*args,**kwargs):
+                super().__init__(*args,**kwargs)
+                self.create_system=0
+        return PlatformZeroInfo
+
+    def test_private_zip_bytes_ignore_host_platform_default(self):
+        import io
+        files={'HANDOFF.md':b'Synthetic portable handoff\n','state.json':b'{"fixture":true}\n'}
+        native=transfer.zip_bytes(files)
+        with mock.patch.object(transfer.zipfile,'ZipInfo',self.platform_zero()):
+            other=transfer.zip_bytes(files)
+        self.assertEqual(native,other)
+        with zipfile.ZipFile(io.BytesIO(native)) as archive:
+            self.assertTrue(all(i.create_system==3 for i in archive.infolist()))
+            self.assertEqual({n:archive.read(n) for n in archive.namelist()},files)
+
+    def test_public_export_ignores_host_platform_default(self):
+        release=PublicExportTests().module()
+        with tempfile.TemporaryDirectory() as d:
+            native=release.export(ROOT,Path(d)/'native.zip')
+            with mock.patch.object(release.zipfile,'ZipInfo',self.platform_zero()):
+                other=release.export(ROOT,Path(d)/'other.zip')
+            self.assertEqual(native['sha256'],other['sha256'])
+            self.assertEqual(native['files'],other['files'])

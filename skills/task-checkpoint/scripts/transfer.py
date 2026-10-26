@@ -46,6 +46,7 @@ def zip_bytes(files):
         for name, data in sorted(files.items()):
             info = zipfile.ZipInfo(name, (2020, 1, 1, 0, 0, 0))
             info.compress_type = zipfile.ZIP_DEFLATED
+            info.create_system = 3  # Canonical POSIX metadata on every host.
             info.external_attr = 0o100600 << 16
             z.writestr(info, data)
     return result.getvalue()
@@ -93,8 +94,10 @@ def package(root, output):
         stop = store/'automatic-stop.json'
         if stop.exists():
             marker = cp.read(stop)
-            files['stop.json'] = cp.encoded({k: marker[k] for k in ('low_kinds','checkpoint_status','checkpoint_id') if k in marker})
-        meta = {'version': 1, 'project_id': binding['project_id'], 'task_id': binding['task_id'],
+            files['stop.json'] = cp.encoded({k: marker[k] for k in ('low_kinds','resource_accounts','checkpoint_status','checkpoint_id') if k in marker})
+        scoped_stop = bool(json.loads(files['stop.json']).get('resource_accounts')) if 'stop.json' in files else False
+        # Older readers must reject scoped stops rather than silently dropping identity.
+        meta = {'version': 2 if scoped_stop else 1, 'project_id': binding['project_id'], 'task_id': binding['task_id'],
                 'checkpoint_id': s['id'], 'source_revision': s['repository']['commit'],
                 'created_at': s['created_at'], 'files': {k: cp.sha(v) for k,v in files.items()},
                 'permissions_restored': False, 'execution_authorized': False}
@@ -130,7 +133,7 @@ def verify(archive, project, task, revision):
     with tempfile.TemporaryDirectory(prefix='checkpoint-verify-') as d:
         store=Path(d);unpack(archive,store)
         meta=cp.read(store/'bundle.json')
-        if (meta.get('version') !=1 or meta.get('project_id')!=project or meta.get('task_id')!=task
+        if (meta.get('version') not in (1,2) or meta.get('project_id')!=project or meta.get('task_id')!=task
             or meta.get('source_revision')!=revision or meta.get('permissions_restored') is not False
             or meta.get('execution_authorized') is not False):
             raise cp.Fault('Bundle identity/source revision mismatch')
@@ -169,7 +172,14 @@ def verify(archive, project, task, revision):
             stop=cp.read(store/'stop.json')
             if not isinstance(stop.get('low_kinds'),list) or not all(k in ('codex_plan','context','api_balance','local_resource') for k in stop['low_kinds']):
                 raise cp.Fault('Invalid transferred resource stop')
+            accounts=stop.get('resource_accounts',[])
+            if not isinstance(accounts,list) or any(not isinstance(a,str) or not re.fullmatch(r'[a-f0-9]{64}',a) for a in accounts) or len(accounts)!=len(set(accounts)):
+                raise cp.Fault('Invalid transferred stop account identities')
+            if accounts and meta['version']!=2:
+                raise cp.Fault('Account-scoped stop requires bundle version2')
             expected.add('stop.json')
+        if meta['version']==2 and (not (store/'stop.json').exists() or not cp.read(store/'stop.json').get('resource_accounts')):
+            raise cp.Fault('Bundle version2 requires an account-scoped stop')
         for ptr in pointers:
             prefix='snapshots/'+ptr['id']+'/'
             expected.update(prefix+n for n in cp.read(store/prefix/'manifest.json'))
@@ -436,7 +446,8 @@ def _adopt_verified(root,ident,review_path,incoming):
             marker = cp.read(stop_path) if stop_path.exists() else {}
             marker.update(schema_version=1,project_id=binding['project_id'],task_id=binding['task_id'],
                 checkpoint_status=transferred.get('checkpoint_status','pending'),checkpoint_id=ident,automatic_resume=False,requested_at=cp.now(),
-                low_kinds=sorted(set(marker.get('low_kinds',[]))|set(transferred['low_kinds'])))
+                low_kinds=sorted(set(marker.get('low_kinds',[]))|set(transferred['low_kinds'])),
+                resource_accounts=sorted(set(marker.get('resource_accounts',[]))|set(transferred.get('resource_accounts',[]))))
             cp.atomic(stop_path,cp.encoded(marker))
         retired=store/'adoption-retired'/ident;retired.mkdir(parents=True,exist_ok=True)
         for name in ('plan-approval.json','router-authorization.json','router-schedule.json','resume.json','input.json'):

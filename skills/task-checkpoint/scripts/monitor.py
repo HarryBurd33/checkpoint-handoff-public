@@ -47,7 +47,7 @@ def _incident(low):
     # Do not hash remaining values or collection times: one depletion incident
     # must not produce a new snapshot at every percentage/poll.
     return cp.sha(cp.encoded(sorted([{
-        'kind': x['kind'], 'window': x.get('window'), 'reset': x.get('resets_at'),
+        'kind': x['kind'], 'account_fingerprint': x.get('account_fingerprint'), 'window': x.get('window'), 'reset': x.get('resets_at'),
         'guard': x.get('guard', 20 if x['kind'] == 'codex_plan' else 0)
     } for x in low], key=lambda x: cp.encoded(x))))
 
@@ -106,6 +106,30 @@ def _preserve(root, store, binding, marker, signals, assessment):
         temporary.unlink(missing_ok=True)
 
 
+def account_scope(signals, marker):
+    wanted = set(marker.get('resource_accounts', [])) if marker else set()
+    if not wanted:
+        return signals
+    result = {'records': [r for r in signals.get('records', []) if r.get('kind') != 'codex_plan']}
+    seen = set()
+    candidates = list(signals.get('records', []))
+    for ident in wanted:
+        candidates += signals.get('accounts', {}).get(ident, {}).get('records', [])
+    for record in candidates:
+        ident = record.get('account_fingerprint')
+        if record.get('kind') == 'codex_plan' and ident in wanted:
+            result['records'].append(record); seen.add(ident)
+    for ident in wanted - seen:
+        result['records'].append({'kind':'codex_plan', 'account_fingerprint':ident, 'unit':'percent_remaining',
+            'remaining':None, 'supported':False, 'source':'missing-account-observation', 'observed_at':cp.now()})
+    return result
+
+
+def affected_accounts(marker, assessment):
+    marker['resource_accounts'] = sorted(set(marker.get('resource_accounts', [])) |
+        {r['account_fingerprint'] for r in assessment['low'] if r.get('account_fingerprint')})
+
+
 def evaluate_registered(state, signals):
     """Preserve each registered task on fresh low signals; never acquire its lease.
 
@@ -134,11 +158,11 @@ def evaluate_registered(state, signals):
                 binding, store = _binding(root, record)
                 # Respect local context/API observations, but account plan readings
                 # always come from this collector rather than an older local copy.
-                combined = {'records': list(normalized['records'])}
+                combined = {'records': list(normalized['records']), 'accounts': signals.get('accounts', {})}
                 if (store / 'signals.json').exists():
                     combined['records'] += [r for r in telemetry.from_checkpoint_signals(cp.read(store / 'signals.json'))['records'] if r.get('kind') != 'codex_plan']
-                assessment = telemetry.assess(combined)
                 marker = _marker(store, binding)
+                assessment = telemetry.assess(account_scope(combined, marker))
                 if assessment['low']:
                     incident = _incident(assessment['low'])
                     if marker is None:
@@ -146,6 +170,7 @@ def evaluate_registered(state, signals):
                                   'requested_at': cp.now(), 'incident_id': incident, 'checkpoint_status': 'pending'}
                     marker.update(incident_id=incident, low_kinds=sorted(set(marker.get('low_kinds', [])) | {x['kind'] for x in assessment['low']}),
                                   account_state=str(state.resolve()), automatic_resume=False)
+                    affected_accounts(marker, assessment)
                     marker.pop('resources_recovered_at', None)
                     # Stop first, then preserve. A failed save must not permit work.
                     cp.atomic(store / 'automatic-stop.json', cp.encoded(marker))
@@ -189,6 +214,7 @@ def stop_for_signals(root, signals):
         'project_id': binding['project_id'], 'requested_at': cp.now(), 'checkpoint_status': 'pending'}
     marker.update(incident_id=_incident(assessment['low']),
         low_kinds=sorted(set(marker.get('low_kinds', [])) | {r['kind'] for r in assessment['low']}), automatic_resume=False)
+    affected_accounts(marker, assessment)
     cp.atomic(store / 'automatic-stop.json', cp.encoded(marker))
     return _preserve(root, store, binding, marker, signals, assessment)
 
@@ -203,13 +229,15 @@ def validate_resume(root, store):
         raise cp.Fault('Automatic preservation is incomplete; repair saving and retry monitor before resume')
     state = Path(marker['account_state']) if marker.get('account_state') else store
     config = cp.read(state / 'config.json') if marker.get('account_state') else {'guard_percent': 20}
-    signals = telemetry.from_checkpoint_signals(cp.read(state / 'signals.json'))
+    raw_signals = cp.read(state / 'signals.json')
+    signals = telemetry.from_checkpoint_signals(raw_signals)
+    signals['accounts'] = raw_signals.get('accounts', {})
     for r in signals['records']:
         if r.get('kind') == 'codex_plan':
             r['guard'] = config.get('guard_percent', 20)
     if (store / 'signals.json').exists():
         signals['records'] += [r for r in telemetry.from_checkpoint_signals(cp.read(store / 'signals.json'))['records'] if r.get('kind') != 'codex_plan']
-    assessment = telemetry.assess(signals)
+    assessment = telemetry.assess(account_scope(signals, marker))
     if assessment['low'] or not marker.get('low_kinds') or any(assessment['statuses'].get(k) != 'ok' for k in marker['low_kinds']):
         raise cp.Fault('Automatic stop persists: refresh all affected resource readings and explicitly resume after recovery')
 

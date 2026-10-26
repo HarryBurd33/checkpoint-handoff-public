@@ -31,6 +31,20 @@ def status(project, skills, state, codex_home):
         result['binding']={**binding,'store_path':str(store)}
         result['persistent_stop']=(store/'automatic-stop.json').exists()
         result['router_active']=cp.read(store/'router.json').get('active') if (store/'router.json').exists() else None
+        # Account-wide events may belong to another registered project. Only
+        # an exact binding receipt establishes delivery for this project.
+        result['project_hook_delivery_status']='missing'
+        delivery=store/'native-hook-delivery.json'
+        if delivery.exists():
+            try:
+                event=cp.read(delivery)
+                matches=(Path(event['root']).resolve()==project.resolve()
+                         and event.get('task_id')==binding['task_id']
+                         and event.get('project_id')==binding['project_id'])
+                result['project_hook_delivery_status']='observed' if matches else 'binding-mismatch'
+                if matches:result['project_hook_delivery']=event
+            except (cp.Fault,OSError,ValueError,KeyError,TypeError):
+                result['project_hook_delivery_status']='invalid-receipt'
     if (state/'config.json').exists():
         config=cp.read(state/'config.json')
         result['account']={'enabled':config.get('enabled'),'reserve':config.get('guard_percent'),

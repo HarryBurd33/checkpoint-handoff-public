@@ -2,7 +2,7 @@
 name: task-checkpoint
 description: Preserve unfinished task work and resume from verified checkpoint artifacts across chats, models or devices. Use for checkpoint now, save and stop, pre-switch handoffs, meaningful milestone saves, or resume from a checkpoint. Opt-in usage routing requires a configured execution adapter and real boundary or scheduler trigger.
 metadata:
-  version: "0.4.0"
+  version: "0.5.0"
 ---
 
 # Task checkpoint
@@ -48,3 +48,5 @@ At the beginning of substantial work, maintain the existing task's `routing.work
 Run planner status before expensive work and at meaningful boundaries, independently of allowance depletion. Qualify the exact tools/privacy/task class before enabling a worker; a lower effort on the same model is a distinct assignment. Include review, repair and handoff overhead. Estimated relative costs are estimates; unknown measured usage remains unknown. If a bounded contract is already authorized by the current user, approve its exact plan/config/acceptance argv through the supported planner approval command without asking again. Source changes invalidate approval and need a fresh operator review/attestation; expired or imported approvals never grant permission. A registered `planned_dispatch` invokes the same bounded planner through the existing native collector. Maintain semantic input when decisions or completed work change.
 
 The 20% account reserve is independent: persist stop and save/verify, then stop ordinary work, even if another model shares the allowance. Never automatically resume on recovered/stale telemetry. Before an eligible worker, the dispatcher saves/verifies a checkpoint, executes only a supported adapter, validates completion, bounds retries and retains uncertain outcomes. If no qualified route or supported interface exists, keep a ready handoff and state the exact model/effort and reviewed resume command. Separate CLI workers do not switch the active desktop conversation.
+
+For distinct Codex account profiles and qualified free local text workers, read [profiles and local execution](references/profiles-local.md). Keep identities, windows and source-account stops distinct; qualify the exact local model/schema/adapter. These workers share the current task authority and do not switch the active desktop chat.

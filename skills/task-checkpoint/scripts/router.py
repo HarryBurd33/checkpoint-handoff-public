@@ -124,6 +124,9 @@ def check_authorization(root, task, config):
 
 def argv_for(worker, root, output):
     interface = worker['interface']
+    if interface == 'local_text':
+        import local_text
+        return local_text.command(worker, output.parent)[0]
     if interface == 'fixture':
         if worker.get('test_only') is not True or worker['provider'] != 'fixture' or worker['billing'] != 'local':
             raise cp.Fault('Fixture adapter cannot run a model or a provider')
@@ -143,6 +146,8 @@ def argv_for(worker, root, output):
             command += ['-c', 'model_provider="openai"']
         else:
             raise cp.Fault('Provider requires a separately configured command worker')
+        if worker.get('codex_home'):
+            command += ['-c', 'forced_login_method="chatgpt"']
         command += ['-']
         return command
     command = worker.get('argv', [])
@@ -225,6 +230,11 @@ def dispatch(root, source, config_path, signals, override=None, trigger='boundar
             return dict(decision, checkpoint_id=saved['id'], executed=False,
                         resume_command=resume_command(root, source, config_path, override))
         worker = next(w for w in config['workers'] if w['id'] == decision['worker_id'])
+        if worker['interface'] == 'local_text':
+            import local_text
+            adapter = Path(local_text.__file__).with_name('local_text_worker.py')
+            if worker['qualification'].get('adapter_sha256') != cp.sha(cp.content(adapter)):
+                raise cp.Fault('Local adapter source differs from qualification; review and requalify')
         if worker['interface'] == 'command':
             saved = cp.checkpoint(root, source, 'pre-switch')
             return dict(decision, action='manual', executed=False, checkpoint_id=saved['id'],
@@ -247,7 +257,17 @@ def dispatch(root, source, config_path, signals, override=None, trigger='boundar
                         reason='Codex executable unavailable on this host')
         if worker['interface'] == 'codex_exec' and worker['billing'] == 'plan':
             from codex_probe import probe
-            observed = probe(worker.get('executable', 'codex'))
+            if worker.get('codex_home'):
+                import profiles
+                observed, profile_signals = profiles.worker_observation(worker, config)
+                if telemetry.assess(profile_signals)['low']:
+                    import monitor
+                    saved = monitor.stop_for_signals(root, profile_signals)
+                    return dict(decision, action='pause', executed=False, normal_work_must_stop=True, checkpoint_id=saved['checkpoint_id'], reason='Selected account reserve reached; explicit reviewed handoff required')
+                if telemetry.assess(profile_signals)['statuses']['codex_plan'] != 'ok':
+                    raise cp.Fault('Selected account allowance unknown; no plan worker launched')
+            else:
+                observed = probe(worker.get('executable', 'codex'))
             account = observed.get('account', {}).get('account') or {}
             if account.get('type') != 'chatgpt':
                 raise cp.Fault('Plan worker requires verified ChatGPT login; API credentials are not a fallback')
@@ -257,7 +277,10 @@ def dispatch(root, source, config_path, signals, override=None, trigger='boundar
             efforts = {e.get('reasoningEffort') for e in available[worker['model']].get('supportedReasoningEfforts', [])}
             if worker['effort'] not in efforts:
                 raise cp.Fault('Selected effort absent from live model/list')
-            fresh = telemetry.normalize_codex(observed['rate_limits'], observed['observed_at'], observed['source'])
+            fresh = profile_signals if worker.get('codex_home') else telemetry.normalize_codex(observed['rate_limits'], observed['observed_at'], observed['source'])
+            if worker.get('codex_home'):
+                fresh['accounts'] = dict(signals.get('accounts', {}))
+                fresh['accounts'][worker['account_fingerprint']] = {'records': list(fresh['records'])}
             guard = max([20] + [r.get('guard', 20) for r in signals.get('records', []) if r.get('kind') == 'codex_plan' and telemetry.number(r.get('guard', 20))])
             for r in fresh['records']:
                 r['guard'] = guard
@@ -286,6 +309,9 @@ def dispatch(root, source, config_path, signals, override=None, trigger='boundar
                   'task_digest': digest(task), 'config_digest': digest(config), 'started_at': cp.now(),
                   'api_cost_usd': None, 'plan_usage': None, 'token_usage': None, 'wall_seconds': 0,
                   'evaluator_seconds': 0, 'checks': [], 'pre_repository': cp.repo(root)['fingerprint']}
+        if worker.get('codex_home'):
+            record['account_fingerprint'] = worker['account_fingerprint']
+            record['execution_profile'] = worker['codex_home']
         current['active'] = record
         save(root, current)  # Durable intent precedes checkpoint and process creation.
         pending = dict(task, jobs=task['jobs'] + [{'id': run_id, 'kind': 'router-worker', 'status': 'pending',
@@ -300,6 +326,9 @@ def dispatch(root, source, config_path, signals, override=None, trigger='boundar
         cp.Ownership(root, binding, store).check()
         environment = dict(os.environ, CHECKPOINT_RESULT=str(output), CHECKPOINT_RUN_ID=run_id,
                            CHECKPOINT_HANDOFF=saved['handoff'])
+        if worker.get('codex_home'):
+            import profiles
+            environment = profiles.worker_environment(worker, environment)
         prompt = ('Perform only the bounded task below. The coordinator retains the exclusive task lease. '
                   'Do not launch other workers, change providers/permissions, or acquire/release ownership. '
                   'Verify the next action and supplied artifacts before work. Return the requested result.\n'
@@ -311,7 +340,13 @@ def dispatch(root, source, config_path, signals, override=None, trigger='boundar
         before_files = cp.repo(root)['files']
         begin = time.monotonic()
         remaining = task['routing']['budget']['max_wall_seconds'] - sum(h.get('wall_seconds', 0) for h in history)
-        result = _run(command, root, environment, prompt if worker['interface'] == 'codex_exec' else None,
+        worker_environment = environment
+        worker_prompt = prompt if worker['interface'] == 'codex_exec' else None
+        if worker['interface'] == 'local_text':
+            import local_text
+            command, worker_environment = local_text.command(worker, folder)
+            worker_prompt = local_text.request(worker, task)
+        result = _run(command, root, worker_environment, worker_prompt,
                       folder / 'worker.log', remaining, started)
         record.update(result)
         if result['status'] == 'uncertain':
@@ -321,6 +356,11 @@ def dispatch(root, source, config_path, signals, override=None, trigger='boundar
         record['status'] = 'validating'
         save(root, current)
         valid = result['exit_code'] == 0
+        if valid and worker['interface'] == 'local_text':
+            try:
+                record['local_usage'] = local_text.result(folder / 'worker.log', output)
+            except (ValueError, OSError, KeyError, TypeError):
+                valid = False
         bounds = task['routing'].get('bounds')
         if bounds is not None:
             after_files = cp.repo(root)['files']
@@ -383,6 +423,11 @@ def read_usage(log):
 def resume_command(root, source, config_path, override=None):
     command = [sys.executable, str(Path(__file__).resolve()), '--root', str(root), 'dispatch',
                '--input', str(source.resolve()), '--config', str(config_path.resolve()), '--collector', 'codex', '--execute']
+    configured_signals = cp.read(config_path).get('signals_path')
+    if configured_signals:
+        index = command.index('--collector')
+        command[index + 1] = 'signals'
+        command += ['--signals', str(Path(configured_signals).resolve())]
     if override:
         command += ['--worker', str(override)]
     return shlex.join(command)

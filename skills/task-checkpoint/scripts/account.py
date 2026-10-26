@@ -111,6 +111,18 @@ def tick(state):
                 raise cp.Fault('Invalid account usage reserve')
             for record in signals['records']:
                 record['guard'] = guard
+            profile_status = None
+            if config.get('codex_profiles'):
+                import profiles
+                profile_status = profiles.collect(config, observed)
+                signals['accounts'] = profile_status['accounts']
+                primary_expected = next((p['account_fingerprint'] for p in config['codex_profiles'] if Path(p['codex_home']).resolve() == Path(config['codex_home']).resolve()), None)
+                primary_id = profiles.inspect_profile(Path(config['codex_home']), observed, primary_expected)
+                for record in signals['records']:
+                    record['account_fingerprint'] = primary_id
+                cp.atomic(state / 'account-profiles.json', cp.encoded(profile_status))
+            if config.get('observe_local_resource') is True:
+                signals['records'].extend(telemetry.disk_usage(state)['records'])
             cp.atomic(state / 'signals.json', cp.encoded(signals))
             signals_promoted = True
             import monitor
@@ -147,6 +159,8 @@ def tick(state):
                     status['scheduled'].append({'task_id': binding['task_id'], 'result': result.get('status', result.get('action'))})
                 except Exception as exc:
                     status['scheduled'].append({'task_id': project.get('task_id', 'unknown'), 'result': 'project-blocked', 'error_type': type(exc).__name__})
+            if profile_status is not None:
+                status['account_profiles'] = profile_status['profiles']
             status['transfers'] = []
             for project in config['projects']:
                 if not project.get('private_transfer'):

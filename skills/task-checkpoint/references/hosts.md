@@ -1,22 +1,22 @@
 # Host capabilities and resource signals
 
-Inspected 2026-10-25: macOS, Python 3.9.6 and 3.15.0 (both tested), Git 2.39.5, Codex CLI 0.164.0; Herdr integration version 10. These are observations, not prerequisites pinned forever. Review current host documentation before adding events.
+Inspected 2026-10-26: macOS, Python 3.9.6 and 3.15.0 (both tested), Git 2.39.5, Codex CLI 0.164.0; Herdr integration version 10. These are observations, not prerequisites pinned forever. Review current host documentation before adding events.
 
 | Surface | Observed/available | Integration status |
 |---|---|---|
 | Python runtime and boundary wrapper, macOS | Explicit checkpoint/verify/inspect/resume, errors and controlled signals | Executed in tests |
 | Codex desktop account limits | `get_usage_limits`; account-wide window percentages/reset times, not task token budget | Live read observed; manual boundary tool call |
-| CLI app-server | Documented account/rateLimits/read and thread/tokenUsage/updated | Reference extension, no new daemon installed |
-| Codex project hooks | SessionStart, PreToolUse, PostToolUse, PreCompact, Stop, Interrupt, SessionEnd documented; installed trust system observed | Project definition prepared/installed; trust and live delivery require native review |
+| CLI app-server | Documented account/rateLimits/read and thread/tokenUsage/updated | Native account collector verified; explicit profile identity and allowance checks |
+| Codex project hooks | SessionStart, PreToolUse, PostToolUse, PreCompact, Stop, Interrupt, SessionEnd documented; installed trust system observed | Trusted global definitions preserved; native SessionEnd delivery verified on this Mac |
 | Herdr | Existing managed SessionStart hook and CLI/worktree/machine helpers | Preserved; no modification of managed Herdr script |
 | Existing Mods | `checkpoints --project PATH --from COMMIT --to COMMIT`, read-only selected commits | Optional existing inspection command, no duplicate store |
 | Codex queue | Host-owned `queue_1.sqlite` observed | Referenced only; unsupported mutation avoided |
-| Windows native | Python/Git design, relative paths, no POSIX lock dependency | Path scenarios simulated on Mac; native execution unavailable |
+| Windows native | Python/Git design, relative paths, no POSIX lock dependency | Native 0.3 evidence retained (97/101 tests); 0.4/0.5 upgrade and cross-device tests deferred |
 | Windows WSL | Separate Linux environment possible | Untested, no WSL installation performed |
 | Other available model/chat | Portable skill and files; explicit review before work | Fresh-context exercise recorded in evidence |
-| Automatic quota → semantic save → stop | Read-only app-server collector and normalized signal adapter now implemented | Collector and hook subprocess path executed separately; continuous collection and native live hook delivery need deployment verification |
+| Automatic quota → semantic save → stop | Read-only app-server collector and normalized signal adapter now implemented | Native collector, preservation, persistent stop and reviewed recovery verified on this Mac |
 | Separate Codex CLI worker | Explicit model/provider/ordinary effort, verified ChatGPT auth, real validation | Live fixed Sol / routed Luna synthetic task passed; current desktop chat is not switched |
-| Clock-triggered boundary | Bounded foreground watch/wake with durable single-use ticket | Actual clock demonstration passed; no background OS service installed |
+| Clock-triggered boundary | Bounded foreground watch/wake with durable single-use ticket | Native minute collector dispatched an approved qualified local package; acceptance and duplicate suppression verified |
 | Sudden power loss/SIGKILL | Last promoted durable generation survives if filesystem does | Cannot save missing semantic updates after death |
 
 Official references: [Hooks](https://learn.chatgpt.com/docs/hooks), [App server](https://learn.chatgpt.com/docs/app-server), [Plugin hook trust](https://developers.openai.com/plugins/build/plugins). Upstream events may exceed installed 0.164.0. No PreModelRequest assumption is made. Hook coverage is incomplete: hosted web tools and specialized paths may bypass tool hooks. A project instruction is not a watcher.
