@@ -124,7 +124,7 @@ def _decide(task, config, signals, history, current_worker=None, override=None, 
             qage = (current - telemetry.timestamp(q.get('observed_at'))).total_seconds()
         except (ValueError, TypeError):
             qage = -1
-        if (q.get('passed') is not True or r['task_class'] not in q.get('task_classes', []) or not q.get('source')
+        if (q.get('model') != w.get('model') or q.get('effort') != w.get('effort') or q.get('passed') is not True or r['task_class'] not in q.get('task_classes', []) or not q.get('source')
                 or not isinstance(q.get('samples'), int) or isinstance(q.get('samples'), bool) or q['samples'] < 1
                 or not telemetry.number(q.get('acceptance_rate')) or not 0 < q['acceptance_rate'] <= 1
                 or not telemetry.number(q.get('mean_total_seconds')) or q['mean_total_seconds'] <= 0

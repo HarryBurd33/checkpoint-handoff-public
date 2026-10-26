@@ -31,7 +31,7 @@ def worker(name, rank, result='42'):
         'availability': {'source': 'owned deterministic fixture adapter', 'observed_at': cp.now()},
         'tools': ['python'], 'privacy': ['private'], 'max_complexity': 'complex',
         'rank': rank, 'effort': 'medium', 'interface': 'fixture', 'fixture_result': result,
-        'qualification': {'task_classes': ['fixture'], 'passed': True,
+        'qualification': {'model': 'deterministic-fixture', 'effort': 'medium', 'task_classes': ['fixture'], 'passed': True,
             'source': 'synthetic fixture contract: output 42; not a model qualification',
             'samples': 1, 'acceptance_rate': 1, 'mean_total_seconds': 1 + rank,
             'observed_at': cp.now()}}
@@ -153,8 +153,26 @@ def run():
         stale_signals = json.loads(json.dumps(low_signals))
         stale_signals['records'][0]['observed_at'] = (dt.datetime.now(dt.timezone.utc)
             - dt.timedelta(minutes=10)).isoformat()
-        stale = boundary.dispatch(stale_signals, trigger='telemetry')
-        assert stale['status'] == 'accepted'
+        try:
+            boundary.dispatch(stale_signals, trigger='telemetry')
+        except cp.Fault:
+            stale = {'status': 'blocked-persistent-stop'}
+        else:
+            raise AssertionError('Stale readings must not bypass the durable stop')
+        binding, store = cp.config(boundary.root)
+        cp.atomic(store/'signals.json', cp.encoded({'records': [{'kind': 'local_resource',
+            'remaining': 1000000, 'unit': 'bytes_available', 'source': 'fresh synthetic recovery',
+            'observed_at': cp.now()}]}))
+        cp.Ownership(boundary.root, binding, store).release()
+        saved, inspected = cp.inspect(boundary.root)
+        review = {'checkpoint_id': saved['id'], 'task_id': saved['task_id'],
+            'next_action': saved['task']['next_action']['description'],
+            'verification': saved['task']['next_action']['verification'],
+            'current_fingerprint': inspected['current_fingerprint'], 'observed_at': cp.now(),
+            'authorization': {'confirmed': True, 'scope': 'temporary fixture after fresh recovery', 'source': 'explicit demo invocation'},
+            'resources': {'adequate_for_bounded_action': True, 'observed_at': cp.now(), 'evidence': 'Fresh synthetic local resource recovery, unchanged artifacts, no jobs'}, 'resolutions': {}}
+        cp.atomic(store/'recovery-review.json', cp.encoded(review))
+        cp.resume(boundary.root, store/'recovery-review.json', 'demo-coordinator', [])
         boundary.prepare('missing-resource')
         missing = boundary.dispatch()
         assert missing['status'] == 'accepted'
@@ -207,8 +225,8 @@ def run():
             'telemetry_boundaries': {
                 'fresh_low_local_resource': {'action': low['action'], 'executed': low['executed'],
                     'checkpoint_created': bool(low['checkpoint_id']), 'attempts': 0},
-                'stale_low_explicit_budget': {'outcome': stale['status'], 'attempt_started': True,
-                    'note': 'stale low observation is unknown; explicit bounded wall/attempt budget permits fixture'},
+                'stale_low_explicit_budget': {'outcome': stale['status'], 'attempt_started': False,
+                    'note': 'stale is unknown and cannot clear a persistent stop; subsequent fresh recovery required explicit reviewed resume'},
                 'missing_explicit_budget': {'outcome': missing['status'], 'attempt_started': True,
                     'note': 'missing telemetry is unknown, never zero; explicit bounded budget permits fixture'}},
             'usage_limitations': 'token usage, paid API cost, and plan usage are unobserved and null; no conversion or quota attribution'}

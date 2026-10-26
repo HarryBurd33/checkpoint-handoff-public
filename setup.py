@@ -63,7 +63,7 @@ def status(project, skills, state, codex_home):
     return result
 
 
-def setup(project, skills, state, codex_home, task=None, project_id=None, native_service=True, reserve=None):
+def setup(project, skills, state, codex_home, task=None, project_id=None, native_service=True, reserve=None, private_repository=None):
     project=project.resolve();skills=skills.resolve();state=state.resolve();codex_home=codex_home.resolve()
     if not shutil.which('git') or not shutil.which('codex'):
         raise cp.Fault('Install Git, Python3.9+ and Codex CLI, then authenticate codex login on this device')
@@ -91,6 +91,15 @@ def setup(project, skills, state, codex_home, task=None, project_id=None, native
             python = shlex.split(definition['hooks'][0]['command'])[0]
     subprocess.run([sys.executable,str(runtime/'account.py'),'--state',str(state),'install','--codex-home',str(codex_home),'--project',str(project),'--python',python],check=True,capture_output=True)
     config=cp.read(state/'config.json')
+    if private_repository:
+        import transfer
+        transfer.private_repo(private_repository)
+        binding,_=cp.config(project)
+        if binding['project_id'].lower()!=private_repository.lower():raise cp.Fault('Private transport must match existing project identity')
+        for record in config['projects']:
+            if record['root']==str(project):
+                record.update(planned_dispatch=True,private_transfer={'repository':private_repository},private_receive={'repository':private_repository})
+        cp.atomic(state/'config.json',cp.encoded(config))
     if reserve is not None:
         if not 0<=reserve<=100:raise cp.Fault('Invalid reserve')
         config['guard_percent']=reserve;cp.atomic(state/'config.json',cp.encoded(config))
@@ -105,9 +114,9 @@ def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('command',choices=['setup','status','repair'])
     p.add_argument('--project',type=Path,default=Path.cwd());p.add_argument('--skills-dir',type=Path,default=Path.home()/'.agents/skills')
     p.add_argument('--state',type=Path,default=Path.home()/'.codex/checkpoint-handoff');p.add_argument('--codex-home',type=Path,default=Path.home()/'.codex')
-    p.add_argument('--task');p.add_argument('--project-id');p.add_argument('--reserve',type=float);p.add_argument('--no-service',action='store_true')
+    p.add_argument('--task');p.add_argument('--project-id');p.add_argument('--private-repository');p.add_argument('--reserve',type=float);p.add_argument('--no-service',action='store_true')
     a=p.parse_args()
-    result=status(a.project.resolve(),a.skills_dir.resolve(),a.state.resolve(),a.codex_home.resolve()) if a.command=='status' else setup(a.project,a.skills_dir,a.state,a.codex_home,a.task,a.project_id,not a.no_service,a.reserve)
+    result=status(a.project.resolve(),a.skills_dir.resolve(),a.state.resolve(),a.codex_home.resolve()) if a.command=='status' else setup(a.project,a.skills_dir,a.state,a.codex_home,a.task,a.project_id,not a.no_service,a.reserve,a.private_repository)
     print(json.dumps(result,indent=2))
 
 if __name__=='__main__':

@@ -34,7 +34,7 @@ class RouterPolicyTests(unittest.TestCase):
                 'availability': {'source': 'test fixture', 'observed_at': NOW},
                 'tools': ['git'], 'privacy': ['private'], 'max_complexity': 'complex',
                 'rank': rank, 'effort': 'medium', 'interface': 'command', 'argv': ['true'],
-                'qualification': {'task_classes': ['edit'], 'passed': True, 'source': 'test fixture',
+                'qualification': {'model': 'test-only-model', 'effort': 'medium', 'task_classes': ['edit'], 'passed': True, 'source': 'test fixture',
                     'samples': 2, 'acceptance_rate': 1, 'mean_total_seconds': 30 + rank * 40, 'observed_at': NOW}}
         self.config = {'workers': [worker('small', 0), worker('large', 1)],
             'allowed_providers': ['fixture'], 'allow_paid': False, 'max_retries': 1}
@@ -53,6 +53,12 @@ class RouterPolicyTests(unittest.TestCase):
         self.assertEqual(self.decide()['worker_id'], 'large')
         self.config['workers'][0]['qualification']['acceptance_rate'] = 1
         self.assertEqual(self.decide()['worker_id'], 'small')
+
+    def test_qualification_is_bound_to_model_and_effort(self):
+        self.config['workers'][0]['effort']='low'
+        self.assertEqual(self.decide()['worker_id'],'large')
+        self.config['workers'][1]['model']='untested-model'
+        self.assertEqual(self.decide()['action'],'manual')
 
     def test_duplicate_worker_ids_fail_before_selection(self):
         first = copy.deepcopy(self.config['workers'][0])

@@ -73,6 +73,9 @@ class PlanTests(unittest.TestCase):
         low=copy.deepcopy(self.config['workers'][0]);low.update(id='same-low',effort='low',estimated_relative_cost=1)
         self.config['workers'][0].update(estimated_relative_cost=2)
         self.config['workers'].append(low)
+        self.assertNotEqual(planner.select(self.task,self.config,self.signals,router.state(self.root))['assignment']['effort'],'low')
+        low['qualification']['effort']='low'
+        low['qualification']['source']='Separate synthetic lower-effort fixture qualification'
         choice=planner.select(self.task,self.config,self.signals,router.state(self.root))
         self.assertEqual(choice['assignment']['effort'],'low')
         self.assertIsNone(choice['assignment']['usage_savings'])
@@ -198,6 +201,27 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(result['adopted'],ident)
         self.assertEqual(cp.read(self.store/'input.json')['objective'],'Incoming beta objective')
         self.assertEqual(cp.read(self.store/'adoption-retired'/ident/'input.json'),original_input)
+
+    def test_new_publication_requires_current_remote_owner(self):
+        binding=dict(self.binding,ownership='remote')
+        cp.atomic(self.store/'config.json',cp.encoded(binding))
+        with mock.patch.object(transfer,'private_repo'),mock.patch.object(cp.Ownership,'check',side_effect=cp.Fault('Foreign owner; no publish')),mock.patch.object(transfer,'gh') as network:
+            with self.assertRaisesRegex(cp.Fault,'Foreign owner'):transfer.publish(self.root,'example/fixture')
+            network.assert_not_called()
+        self.assertEqual(cp.latest(self.store)[0]['id'],self.initial['id'])
+
+    def test_automatic_receive_selects_task_and_never_adopts(self):
+        tag='checkpoint-bundle-fixture-'+'a'*32;asset='bundle-'+'b'*64+'.zip'
+        releases=[{'tag_name':tag,'published_at':cp.now(),'draft':False,'assets':[{'name':asset,'state':'uploaded'}]},
+                  {'tag_name':'other-task','published_at':cp.now(),'assets':[]}]
+        with mock.patch.object(transfer,'private_repo'),mock.patch.object(transfer,'gh',return_value=json.dumps(releases).encode()),mock.patch.object(transfer,'receive',return_value={'worker_started':False,'owner_acquired':False}) as receive:
+            result=transfer.receive_latest(self.root,'example/fixture')
+            self.assertFalse(result['automatic_adoption']);self.assertFalse(result['worker_started'])
+            self.assertEqual(receive.call_args.args[2:4],(tag,asset))
+            self.assertEqual(receive.call_args.args[4],cp.git_text(self.root,'rev-parse','HEAD'))
+            releases[0]['published_at']=None
+            transfer.gh.return_value=json.dumps(releases).encode()
+            with self.assertRaises(cp.Fault):transfer.receive_latest(self.root,'example/fixture')
 
     def test_adoption_refuses_competing_owner(self):
         meta=self.package();ident=meta['checkpoint_id']

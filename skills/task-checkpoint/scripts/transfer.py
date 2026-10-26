@@ -222,6 +222,11 @@ def publish(root, repository):
         success = guard/'last-success.json'
         if success.exists() and cp.read(success).get('checkpoint_id') == current['id']:
             return dict(cp.read(success), deduplicated=True)
+        if binding['ownership']=='remote':
+            # New outbound generations require the current source lease. An old
+            # device may keep a local preservation snapshot, but cannot publish
+            # it over a handoff after ownership moved to another computer.
+            cp.Ownership(root,binding,store).check()
         archive=guard/'bundle.zip';meta=package(root,archive)
         tag='checkpoint-bundle-'+binding['task_id']+'-'+meta['checkpoint_id']
         asset='bundle-'+meta['archive_sha256']+'.zip'
@@ -269,6 +274,40 @@ def receive(root, repository, tag, asset, revision):
         path=Path(d)/asset;meta=verify(path,binding['project_id'],binding['task_id'],revision)
         return quarantine(root,path,digest,binding['project_id'],binding['task_id'],revision,
                           store/'incoming'/meta['checkpoint_id'])
+
+
+def receive_latest(root, repository):
+    """Automatically quarantine the newest task asset; never adopt or execute.
+
+    Source Git must already match the bundle. Unknown/future release timestamps,
+    source drift and conflicting assets remain pending rather than selecting an
+    older generation or granting recovery permission.
+    """
+    private_repo(repository)
+    binding,_=cp.config(root)
+    if binding['project_id'].lower()!=repository.lower():
+        raise cp.Fault('Receive repository differs from bound project')
+    releases=json.loads(gh(['api','repos/'+repository+'/releases?per_page=100']))
+    prefix='checkpoint-bundle-'+binding['task_id']+'-'
+    candidates=[]
+    for release in releases:
+        tag=release.get('tag_name','')
+        if not tag.startswith(prefix) or not re.fullmatch(r'[a-f0-9]{32}',tag[len(prefix):]) or release.get('draft'):
+            continue
+        if not isinstance(release.get('published_at'),str):
+            raise cp.Fault('Release freshness unknown; explicit review required')
+        try: elapsed=cp.age(release.get('published_at'))
+        except (cp.Fault,TypeError,ValueError,OverflowError):raise cp.Fault('Release freshness unknown; explicit review required')
+        if elapsed<0:raise cp.Fault('Future release timestamp; no automatic receive')
+        candidates.append((release['published_at'],release))
+    if not candidates:return {'status':'no-task-bundle','worker_started':False,'owner_acquired':False}
+    newest=max(candidates,key=lambda item:item[0])[1]
+    assets=newest.get('assets',[])
+    if len(assets)!=1 or assets[0].get('state')!='uploaded' or not re.fullmatch(r'bundle-[a-f0-9]{64}\.zip',assets[0].get('name','')):
+        raise cp.Fault('Newest task asset incomplete/conflicting; preserve prior received state')
+    revision=cp.git_text(root,'rev-parse','HEAD')
+    received=receive(root,repository,newest['tag_name'],assets[0]['name'],revision)
+    return dict(received,status='quarantined',automatic_adoption=False)
 
 
 @contextlib.contextmanager
@@ -429,10 +468,12 @@ def main():
     pack=sub.add_parser('package');pack.add_argument('--output',type=Path,required=True)
     pub=sub.add_parser('publish');pub.add_argument('--repository',required=True)
     get=sub.add_parser('receive');get.add_argument('--repository',required=True);get.add_argument('--tag',required=True);get.add_argument('--asset',required=True);get.add_argument('--revision',required=True)
+    latest=sub.add_parser('receive-latest');latest.add_argument('--repository',required=True)
     inspect=sub.add_parser('inspect-incoming');inspect.add_argument('--id',required=True)
     adopt_parser=sub.add_parser('adopt');adopt_parser.add_argument('--id',required=True);adopt_parser.add_argument('--review',type=Path,required=True)
     a=p.parse_args();root=a.root.resolve()
-    if a.command=='inspect-incoming':result=inspect_incoming(root,a.id)[1]
+    if a.command=='receive-latest':result=receive_latest(root,a.repository)
+    elif a.command=='inspect-incoming':result=inspect_incoming(root,a.id)[1]
     elif a.command=='adopt':result=adopt(root,a.id,a.review)
     else:result=package(root,a.output) if a.command=='package' else publish(root,a.repository) if a.command=='publish' else receive(root,a.repository,a.tag,a.asset,a.revision)
     print(json.dumps(result,indent=2))

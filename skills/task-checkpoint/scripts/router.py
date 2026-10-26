@@ -201,7 +201,7 @@ def dispatch(root, source, config_path, signals, override=None, trigger='boundar
         if telemetry.assess(signals)['low']:
             import monitor
             saved = monitor.stop_for_signals(root, signals)
-            return {'action': 'pause', 'executed': False, 'normal_work_must_stop': True, 'checkpoint': saved}
+            return {'action': 'pause', 'executed': False, 'normal_work_must_stop': True, 'checkpoint': saved, 'checkpoint_id': saved.get('checkpoint_id')}
         prerequisites(root, task)
         check_authorization(root, task, config)
         current = state(root)

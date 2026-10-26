@@ -40,7 +40,9 @@
         "source": "Supply representative task evidence; demonstration covers only bounded-json-transform",
         "samples": 0,
         "acceptance_rate": 0,
-        "mean_total_seconds": 0
+        "mean_total_seconds": 0,
+        "model": "gpt-6-luna",
+        "effort": "medium"
       }
     },
     {
@@ -68,7 +70,9 @@
         "source": "Supply representative task evidence; demonstration covers only bounded-json-transform",
         "samples": 0,
         "acceptance_rate": 0,
-        "mean_total_seconds": 0
+        "mean_total_seconds": 0,
+        "model": "gpt-6.1-sol",
+        "effort": "medium"
       }
     }
   ]

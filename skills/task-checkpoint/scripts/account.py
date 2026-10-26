@@ -157,6 +157,16 @@ def tick(state):
                     status['transfers'].append({'task_id': project['task_id'], **result})
                 except Exception as exc:
                     status['transfers'].append({'task_id': project['task_id'], 'status': 'pending-retry', 'error_type': type(exc).__name__})
+            status['receives'] = []
+            for project in config['projects']:
+                if not project.get('private_receive'):
+                    continue
+                try:
+                    import transfer
+                    result = transfer.receive_latest(Path(project['root']), project['private_receive']['repository'])
+                    status['receives'].append({'task_id': project['task_id'], **result})
+                except Exception as exc:
+                    status['receives'].append({'task_id': project['task_id'], 'status': 'pending-source-sync-or-review', 'error_type': type(exc).__name__})
             cp.atomic(state / 'status.json', cp.encoded(status))
             return status
         except Exception as exc:

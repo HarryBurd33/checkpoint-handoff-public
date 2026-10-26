@@ -45,7 +45,7 @@ class RouterRuntimeTests(unittest.TestCase):
                 'tools': ['python'], 'privacy': ['private'], 'max_complexity': 'complex',
                 'rank': rank, 'effort': 'medium', 'interface': 'fixture', 'fixture_result': result,
                 'argv': [sys.executable, '-c', "import os;from pathlib import Path;Path(os.environ['CHECKPOINT_RESULT']).write_text(" + repr(result) + ")"],
-                'qualification': {'task_classes': ['fixture'], 'passed': True, 'source': 'deterministic fixture',
+                'qualification': {'model': 'deterministic-fixture', 'effort': 'medium', 'task_classes': ['fixture'], 'passed': True, 'source': 'deterministic fixture',
                     'samples': 1, 'acceptance_rate': 1, 'mean_total_seconds': 1 + rank, 'observed_at': cp.now()}}
         self.config = {'version': 1, 'queue_authority': 'checkpoint:fixture:fixture',
             'workers': [worker('small', 0, '42'), worker('large', 1, '42')], 'allowed_providers': ['fixture'],
