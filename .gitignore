@@ -1,0 +1,10 @@
+.checkpoint/
+.private/
+__pycache__/
+*.pyc
+*.sqlite*
+*.db*
+.env
+.env.*
+dist/
+.codex/
